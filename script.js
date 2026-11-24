@@ -56,8 +56,8 @@ document.addEventListener('DOMContentLoaded', () => {
         resetBtn.addEventListener('click', resetWorkspace);
 
         formatSelect.addEventListener('change', () => {
-            // Hide quality slider for PNG as it's lossless
-            if (formatSelect.value === 'image/png') {
+            // Hide quality slider for lossless formats (PNG, SVG)
+            if (formatSelect.value === 'image/png' || formatSelect.value === 'image/svg+xml') {
                 qualityGroup.classList.add('hidden');
             } else {
                 qualityGroup.classList.remove('hidden');
@@ -91,15 +91,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         newFiles.forEach(file => {
-            const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
-            if (!validTypes.includes(file.type)) return;
+            const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml'];
+            const isSvgByName = file.name.toLowerCase().endsWith('.svg');
+            if (!validTypes.includes(file.type) && !isSvgByName) return;
 
             const reader = new FileReader();
             reader.onload = (e) => {
                 const img = new Image();
                 img.onload = () => {
                     const originalName = file.name.substring(0, file.name.lastIndexOf('.')) || 'image';
-                    currentFiles.push({ file, image: img, originalName });
+                    currentFiles.push({ file, image: img, originalName, rawDataUrl: e.target.result });
 
                     // Render UI thumbnail
                     const item = document.createElement('div');
@@ -140,25 +141,49 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(async () => {
             const format = formatSelect.value;
             const quality = parseInt(qualitySlider.value) / 100;
-            let extension = format.split('/')[1];
-            if (extension === 'jpeg') extension = 'jpg';
+            let extension = 'jpg';
+            if (format === 'image/png') extension = 'png';
+            else if (format === 'image/webp') extension = 'webp';
+            else if (format === 'image/svg+xml') extension = 'svg';
 
             for (let i = 0; i < currentFiles.length; i++) {
                 const item = currentFiles[i];
-                const canvas = document.createElement('canvas');
-                canvas.width = item.image.width;
-                canvas.height = item.image.height;
-                const ctx = canvas.getContext('2d');
+                let blob;
 
-                // If converting to jpeg, fill white background to resolve transparency issues
-                if (format === 'image/jpeg') {
-                    ctx.fillStyle = '#ffffff';
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                if (format === 'image/svg+xml') {
+                    // Check if the original file is already SVG
+                    if (item.file.type === 'image/svg+xml' || item.file.name.toLowerCase().endsWith('.svg')) {
+                        blob = item.file;
+                    } else {
+                        // Convert raster image (PNG, JPG, WEBP) to SVG wrapper
+                        const width = item.image.naturalWidth || item.image.width || 300;
+                        const height = item.image.naturalHeight || item.image.height || 150;
+                        const dataUrl = item.rawDataUrl;
+                        const svgContent = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+    <image width="${width}" height="${height}" xlink:href="${dataUrl}"/>
+</svg>`;
+                        blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+                    }
+                } else {
+                    // Converting any format (including SVG input) to Canvas raster (JPEG, PNG, WEBP)
+                    const canvas = document.createElement('canvas');
+                    const width = item.image.naturalWidth || item.image.width || 300;
+                    const height = item.image.naturalHeight || item.image.height || 150;
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+
+                    // If converting to jpeg, fill white background to resolve transparency issues
+                    if (format === 'image/jpeg') {
+                        ctx.fillStyle = '#ffffff';
+                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    }
+                    ctx.drawImage(item.image, 0, 0, width, height);
+
+                    // Convert using a Promise wrapper to work nicely with await
+                    blob = await new Promise(resolve => canvas.toBlob(resolve, format, quality));
                 }
-                ctx.drawImage(item.image, 0, 0);
-
-                // Convert using a Promise wrapper to work nicely with await
-                const blob = await new Promise(resolve => canvas.toBlob(resolve, format, quality));
 
                 // Unique name strategy if batching duplicates
                 const newFileName = `${item.originalName}_converted.${extension}`;
