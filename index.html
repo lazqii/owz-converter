@@ -14,6 +14,8 @@
     <link rel="stylesheet" href="style.css">
     <!-- JSZip Library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- PDF.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 
 <body>
@@ -35,15 +37,15 @@
         <section class="glass-panel main-panel">
             <!-- Upload Area -->
             <div id="upload-area" class="upload-area">
-                <input type="file" id="file-input" accept="image/jpeg, image/png, image/webp, image/svg+xml" multiple hidden>
+                <input type="file" id="file-input" accept="image/jpeg, image/png, image/webp, image/svg+xml, application/pdf" multiple hidden>
                 <div class="upload-content">
                     <i class="ri-upload-cloud-2-line upload-icon"></i>
-                    <h2>Drag & Drop your image here</h2>
+                    <h2>Drag & Drop your image or PDF here</h2>
                     <p>or</p>
                     <button class="btn btn-primary" onclick="document.getElementById('file-input').click()">
                         Browse Files
                     </button>
-                    <p class="formats-info">Supports JPG, PNG, WEBP, SVG (Max 10 files)</p>
+                    <p class="formats-info">Supports JPG, PNG, WEBP, SVG, PDF (Max 10 files / 10 PDF pages)</p>
                 </div>
             </div>
 

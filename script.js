@@ -23,6 +23,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialization
     function init() {
+        if (typeof pdfjsLib !== 'undefined') {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
         setupEventListeners();
     }
 
@@ -76,51 +79,160 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Handlers
-    function handleFiles(filesList) {
+    async function handleFiles(filesList) {
         const newFiles = Array.from(filesList);
 
         if (currentFiles.length + newFiles.length > 10) {
-            alert('Maksimal 10 gambar yang dapat diproses sekaligus.');
+            alert('Maksimal 10 file/halaman yang dapat diproses sekaligus.');
+            fileInput.value = '';
             return;
         }
 
-        // Switch active view
-        if (currentFiles.length === 0 && newFiles.length > 0) {
-            uploadArea.classList.add('hidden');
-            workspace.classList.remove('hidden');
-        }
-
-        newFiles.forEach(file => {
+        for (const file of newFiles) {
+            const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
             const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml'];
             const isSvgByName = file.name.toLowerCase().endsWith('.svg');
-            if (!validTypes.includes(file.type) && !isSvgByName) return;
 
+            if (isPdf) {
+                await processPdfFile(file);
+            } else if (validTypes.includes(file.type) || isSvgByName) {
+                if (currentFiles.length >= 10) {
+                    alert('Maksimal 10 gambar/halaman yang dapat diproses sekaligus.');
+                    break;
+                }
+                await processImageFile(file);
+            }
+        }
+
+        if (currentFiles.length > 0) {
+            uploadArea.classList.add('hidden');
+            workspace.classList.remove('hidden');
+            updateStats();
+            hideDownloadBtn();
+        }
+
+        fileInput.value = '';
+    }
+
+    function processImageFile(file) {
+        return new Promise((resolve) => {
             const reader = new FileReader();
             reader.onload = (e) => {
                 const img = new Image();
                 img.onload = () => {
                     const originalName = file.name.substring(0, file.name.lastIndexOf('.')) || 'image';
-                    currentFiles.push({ file, image: img, originalName, rawDataUrl: e.target.result });
+                    currentFiles.push({
+                        file,
+                        image: img,
+                        originalName,
+                        rawDataUrl: e.target.result,
+                        displaySize: file.size
+                    });
 
-                    // Render UI thumbnail
-                    const item = document.createElement('div');
-                    item.className = 'preview-item';
-                    item.innerHTML = `
-                        <img src="${e.target.result}" alt="${originalName}">
-                        <div class="file-name">${file.name}</div>
-                    `;
-                    previewGallery.appendChild(item);
-
-                    updateStats();
+                    appendPreviewItem(e.target.result, originalName, file.name);
+                    resolve();
                 };
+                img.onerror = () => resolve();
                 img.src = e.target.result;
             };
+            reader.onerror = () => resolve();
             reader.readAsDataURL(file);
         });
     }
 
+    async function processPdfFile(file) {
+        if (typeof pdfjsLib === 'undefined') {
+            alert('Library PDF.js gagal dimuat. Pastikan koneksi internet aktif.');
+            return;
+        }
+
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            const totalPages = pdfDoc.numPages;
+            const MAX_PDF_PAGES = 10;
+
+            if (totalPages > MAX_PDF_PAGES) {
+                alert(`Maksimal ${MAX_PDF_PAGES} halaman PDF dalam sekali konversi. File "${file.name}" memiliki ${totalPages} halaman.`);
+                return;
+            }
+
+            if (currentFiles.length + totalPages > MAX_PDF_PAGES) {
+                alert(`Total gambar dan halaman PDF melebihi batas maksimal ${MAX_PDF_PAGES} item dalam sekali konversi.`);
+                return;
+            }
+
+            // Show workspace early while rendering pages
+            uploadArea.classList.add('hidden');
+            workspace.classList.remove('hidden');
+            originalDimensions.textContent = `Memproses PDF (0/${totalPages})...`;
+
+            const baseName = file.name.substring(0, file.name.lastIndexOf('.')) || 'document';
+            const scale = 2.0;
+
+            for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+                originalDimensions.textContent = `Memproses PDF (${pageNum}/${totalPages})...`;
+
+                const page = await pdfDoc.getPage(pageNum);
+                const viewport = page.getViewport({ scale });
+
+                const canvas = document.createElement('canvas');
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                const ctx = canvas.getContext('2d');
+
+                // White background so PDF text/elements stay clear even on PNG/WEBP
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                await page.render({ canvasContext: ctx, viewport }).promise;
+
+                const dataUrl = canvas.toDataURL('image/png');
+                const img = await loadImageFromDataUrl(dataUrl);
+                const pageLabel = `${file.name} (Hal. ${pageNum})`;
+                const pageOriginalName = totalPages > 1 ? `${baseName}_page_${pageNum}` : baseName;
+
+                currentFiles.push({
+                    file,
+                    image: img,
+                    originalName: pageOriginalName,
+                    rawDataUrl: dataUrl,
+                    displaySize: pageNum === 1 ? file.size : 0
+                });
+
+                appendPreviewItem(dataUrl, pageOriginalName, pageLabel);
+                updateStats();
+            }
+        } catch (error) {
+            console.error('Error processing PDF:', error);
+            alert(`Gagal membaca file PDF "${file.name}". Pastikan file tidak rusak atau terenkripsi.`);
+            if (currentFiles.length === 0) {
+                resetWorkspace();
+            }
+        }
+    }
+
+    function loadImageFromDataUrl(dataUrl) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = reject;
+            img.src = dataUrl;
+        });
+    }
+
+    function appendPreviewItem(src, alt, label) {
+        const item = document.createElement('div');
+        item.className = 'preview-item';
+        item.innerHTML = `
+            <img src="${src}" alt="${alt}">
+            <div class="file-name" title="${label}">${label}</div>
+        `;
+        previewGallery.appendChild(item);
+    }
+
     function updateStats() {
-        const totalSize = currentFiles.reduce((acc, obj) => acc + obj.file.size, 0);
+        const totalSize = currentFiles.reduce((acc, obj) => acc + (obj.displaySize !== undefined ? obj.displaySize : obj.file.size), 0);
         originalSize.textContent = `Files: ${currentFiles.length}/10`;
         originalDimensions.textContent = `Total Size: ${formatBytes(totalSize)}`;
     }
