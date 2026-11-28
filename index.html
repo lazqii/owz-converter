@@ -18,6 +18,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <!-- jsPDF Library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- pdf-lib Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 </head>
 
 <body>
@@ -37,17 +39,27 @@
         </header>
 
         <section class="glass-panel main-panel">
+            <!-- Mode Toggle -->
+            <div class="mode-toggle" role="tablist" aria-label="Converter Mode">
+                <button type="button" id="mode-image-btn" class="mode-btn active" data-mode="image">
+                    <i class="ri-image-line"></i> Image Converter
+                </button>
+                <button type="button" id="mode-pdf-btn" class="mode-btn" data-mode="pdf">
+                    <i class="ri-file-pdf-2-line"></i> PDF Tools
+                </button>
+            </div>
+
             <!-- Upload Area -->
             <div id="upload-area" class="upload-area">
                 <input type="file" id="file-input" accept="image/jpeg, image/png, image/webp, image/svg+xml, application/pdf" multiple hidden>
                 <div class="upload-content">
                     <i class="ri-upload-cloud-2-line upload-icon"></i>
-                    <h2>Drag & Drop your image or PDF here</h2>
+                    <h2 id="upload-title">Drag & Drop your image or PDF here</h2>
                     <p>or</p>
                     <button class="btn btn-primary" onclick="document.getElementById('file-input').click()">
                         Browse Files
                     </button>
-                    <p class="formats-info">Supports JPG, PNG, WEBP, SVG, PDF (Max 10 files / 10 PDF pages)</p>
+                    <p id="upload-formats-info" class="formats-info">Supports JPG, PNG, WEBP, SVG, PDF (Max 10 files / 10 PDF pages)</p>
                 </div>
             </div>
 
@@ -75,27 +87,50 @@
                     <div class="controls-section glass-panel-inner">
                         <h3>Settings</h3>
 
-                        <div class="control-group">
-                            <label for="format-select">Convert to:</label>
-                            <div class="custom-select">
-                                <select id="format-select">
-                                    <option value="image/jpeg">JPEG (.jpg)</option>
-                                    <option value="image/png">PNG (.png)</option>
-                                    <option value="image/webp">WEBP (.webp)</option>
-                                    <option value="image/svg+xml">SVG (.svg)</option>
-                                    <option value="application/pdf">PDF (.pdf)</option>
-                                </select>
-                                <i class="ri-arrow-down-s-line select-icon"></i>
+                        <!-- Image Mode Controls -->
+                        <div id="image-controls" class="controls-group-wrapper">
+                            <div class="control-group">
+                                <label for="format-select">Convert to:</label>
+                                <div class="custom-select">
+                                    <select id="format-select">
+                                        <option value="image/jpeg">JPEG (.jpg)</option>
+                                        <option value="image/png">PNG (.png)</option>
+                                        <option value="image/webp">WEBP (.webp)</option>
+                                        <option value="image/svg+xml">SVG (.svg)</option>
+                                        <option value="application/pdf">PDF (.pdf)</option>
+                                    </select>
+                                    <i class="ri-arrow-down-s-line select-icon"></i>
+                                </div>
+                            </div>
+
+                            <div class="control-group" id="quality-group">
+                                <div class="label-row">
+                                    <label for="quality-slider">Quality:</label>
+                                    <span id="quality-value">80%</span>
+                                </div>
+                                <input type="range" id="quality-slider" min="10" max="100" value="80" class="slider">
+                                <p class="hint">Higher quality increases file size.</p>
                             </div>
                         </div>
 
-                        <div class="control-group" id="quality-group">
-                            <div class="label-row">
-                                <label for="quality-slider">Quality:</label>
-                                <span id="quality-value">80%</span>
+                        <!-- PDF Tools Controls -->
+                        <div id="pdf-controls" class="controls-group-wrapper hidden">
+                            <div class="control-group">
+                                <label for="pdf-action-select">PDF Action:</label>
+                                <div class="custom-select">
+                                    <select id="pdf-action-select">
+                                        <option value="merge">Merge PDF (Combine files)</option>
+                                        <option value="split">Split PDF (Extract pages)</option>
+                                    </select>
+                                    <i class="ri-arrow-down-s-line select-icon"></i>
+                                </div>
                             </div>
-                            <input type="range" id="quality-slider" min="10" max="100" value="80" class="slider">
-                            <p class="hint">Higher quality increases file size.</p>
+
+                            <div class="control-group hidden" id="pdf-range-group">
+                                <label for="pdf-range-input">Page Range (optional):</label>
+                                <input type="text" id="pdf-range-input" class="text-input" placeholder="e.g. 1-3, 5">
+                                <p class="hint">Leave empty to split every page into separate PDFs.</p>
+                            </div>
                         </div>
 
                         <div class="action-buttons">

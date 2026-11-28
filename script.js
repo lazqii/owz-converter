@@ -1,5 +1,10 @@
 document.addEventListener('DOMContentLoaded', () => {
     // DOM Elements
+    const modeImageBtn = document.getElementById('mode-image-btn');
+    const modePdfBtn = document.getElementById('mode-pdf-btn');
+    const uploadTitle = document.getElementById('upload-title');
+    const uploadFormatsInfo = document.getElementById('upload-formats-info');
+
     const uploadArea = document.getElementById('upload-area');
     const fileInput = document.getElementById('file-input');
     const workspace = document.getElementById('workspace');
@@ -8,16 +13,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const originalDimensions = document.getElementById('original-dimensions');
     const resetBtn = document.getElementById('reset-btn');
 
+    const imageControls = document.getElementById('image-controls');
     const formatSelect = document.getElementById('format-select');
     const qualityGroup = document.getElementById('quality-group');
     const qualitySlider = document.getElementById('quality-slider');
     const qualityValue = document.getElementById('quality-value');
 
+    const pdfControls = document.getElementById('pdf-controls');
+    const pdfActionSelect = document.getElementById('pdf-action-select');
+    const pdfRangeGroup = document.getElementById('pdf-range-group');
+    const pdfRangeInput = document.getElementById('pdf-range-input');
+
     const convertBtn = document.getElementById('convert-btn');
     const downloadBtn = document.getElementById('download-btn');
 
     // State
+    let currentMode = 'image'; // 'image' | 'pdf'
     let currentFiles = []; // Array of { file, image, originalName }
+    let pdfToolFiles = []; // Array of { file, arrayBuffer, pageCount, originalName }
     let convertedBlobs = []; // Array of { blob, newFileName }
     let currentObjectUrls = []; // Array of URLs for cleanup
 
@@ -55,6 +68,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
+        // Mode Toggle
+        modeImageBtn.addEventListener('click', () => switchMode('image'));
+        modePdfBtn.addEventListener('click', () => switchMode('pdf'));
+
         // UI Controls
         resetBtn.addEventListener('click', resetWorkspace);
 
@@ -73,14 +90,88 @@ document.addEventListener('DOMContentLoaded', () => {
             hideDownloadBtn();
         });
 
+        pdfActionSelect.addEventListener('change', () => {
+            if (pdfActionSelect.value === 'split') {
+                pdfRangeGroup.classList.remove('hidden');
+            } else {
+                pdfRangeGroup.classList.add('hidden');
+            }
+            hideDownloadBtn();
+        });
+
+        pdfRangeInput.addEventListener('input', hideDownloadBtn);
+
         // Actions
-        convertBtn.addEventListener('click', convertImages);
+        convertBtn.addEventListener('click', () => {
+            if (currentMode === 'pdf') {
+                processPdfTools();
+            } else {
+                convertImages();
+            }
+        });
         downloadBtn.addEventListener('click', downloadConvertedImages);
+    }
+
+    function switchMode(mode) {
+        if (currentMode === mode) return;
+        currentMode = mode;
+
+        if (mode === 'pdf') {
+            modePdfBtn.classList.add('active');
+            modeImageBtn.classList.remove('active');
+            fileInput.setAttribute('accept', 'application/pdf');
+            uploadTitle.textContent = 'Drag & Drop your PDF files here';
+            uploadFormatsInfo.textContent = 'Supports PDF for Merge & Split (Max 10 PDF files)';
+            imageControls.classList.add('hidden');
+            pdfControls.classList.remove('hidden');
+        } else {
+            modeImageBtn.classList.add('active');
+            modePdfBtn.classList.remove('active');
+            fileInput.setAttribute('accept', 'image/jpeg, image/png, image/webp, image/svg+xml, application/pdf');
+            uploadTitle.textContent = 'Drag & Drop your image or PDF here';
+            uploadFormatsInfo.textContent = 'Supports JPG, PNG, WEBP, SVG, PDF (Max 10 files / 10 PDF pages)';
+            pdfControls.classList.add('hidden');
+            imageControls.classList.remove('hidden');
+        }
+
+        resetWorkspace();
     }
 
     // Handlers
     async function handleFiles(filesList) {
         const newFiles = Array.from(filesList);
+
+        if (currentMode === 'pdf') {
+            if (pdfToolFiles.length + newFiles.length > 10) {
+                alert('Maksimal 10 file PDF yang dapat diproses sekaligus.');
+                fileInput.value = '';
+                return;
+            }
+
+            let hasInvalid = false;
+            for (const file of newFiles) {
+                const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+                if (!isPdf) {
+                    hasInvalid = true;
+                    continue;
+                }
+                await processPdfToolFile(file);
+            }
+
+            if (hasInvalid && pdfToolFiles.length === 0) {
+                alert('Mode PDF Tools hanya menerima file PDF.');
+            }
+
+            if (pdfToolFiles.length > 0) {
+                uploadArea.classList.add('hidden');
+                workspace.classList.remove('hidden');
+                updateStats();
+                hideDownloadBtn();
+            }
+
+            fileInput.value = '';
+            return;
+        }
 
         if (currentFiles.length + newFiles.length > 10) {
             alert('Maksimal 10 file/halaman yang dapat diproses sekaligus.');
@@ -231,7 +322,57 @@ document.addEventListener('DOMContentLoaded', () => {
         previewGallery.appendChild(item);
     }
 
+    async function processPdfToolFile(file) {
+        if (typeof window.PDFLib === 'undefined') {
+            alert('Library pdf-lib gagal dimuat. Pastikan koneksi internet aktif.');
+            return;
+        }
+
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: false });
+            const pageCount = pdfDoc.getPageCount();
+            const originalName = file.name.substring(0, file.name.lastIndexOf('.')) || 'document';
+
+            // Render first page thumbnail using PDF.js if available
+            let thumbDataUrl = '';
+            if (typeof pdfjsLib !== 'undefined') {
+                try {
+                    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer.slice(0) });
+                    const pdfJsDoc = await loadingTask.promise;
+                    const page = await pdfJsDoc.getPage(1);
+                    const viewport = page.getViewport({ scale: 0.6 });
+                    const canvas = document.createElement('canvas');
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    await page.render({ canvasContext: ctx, viewport }).promise;
+                    thumbDataUrl = canvas.toDataURL('image/png');
+                } catch (thumbErr) {
+                    console.warn('Could not render PDF thumbnail:', thumbErr);
+                }
+            }
+
+            pdfToolFiles.push({ file, arrayBuffer, pageCount, originalName });
+            const label = `${file.name} (${pageCount} hal.)`;
+            appendPreviewItem(thumbDataUrl, originalName, label);
+        } catch (error) {
+            console.error('Error loading PDF for tools:', error);
+            alert(`Gagal membaca file PDF "${file.name}". Pastikan file tidak rusak atau terenkripsi.`);
+        }
+    }
+
     function updateStats() {
+        if (currentMode === 'pdf') {
+            const totalSize = pdfToolFiles.reduce((acc, obj) => acc + obj.file.size, 0);
+            const totalPages = pdfToolFiles.reduce((acc, obj) => acc + obj.pageCount, 0);
+            originalSize.textContent = `PDFs: ${pdfToolFiles.length}/10 (${totalPages} hal.)`;
+            originalDimensions.textContent = `Total Size: ${formatBytes(totalSize)}`;
+            return;
+        }
+
         const totalSize = currentFiles.reduce((acc, obj) => acc + (obj.displaySize !== undefined ? obj.displaySize : obj.file.size), 0);
         originalSize.textContent = `Files: ${currentFiles.length}/10`;
         originalDimensions.textContent = `Total Size: ${formatBytes(totalSize)}`;
@@ -252,6 +393,126 @@ document.addEventListener('DOMContentLoaded', () => {
         ctx.drawImage(item.image, 0, 0, width, height);
 
         return { canvas, width, height };
+    }
+
+    async function processPdfTools() {
+        if (pdfToolFiles.length === 0) return;
+        if (typeof window.PDFLib === 'undefined') {
+            alert('Library pdf-lib gagal dimuat. Pastikan koneksi internet aktif.');
+            return;
+        }
+
+        const action = pdfActionSelect.value;
+        convertBtn.classList.add('loading');
+        convertBtn.innerHTML = '<i class="ri-loader-4-line"></i> Processing...';
+
+        convertedBlobs = [];
+        currentObjectUrls.forEach(url => URL.revokeObjectURL(url));
+        currentObjectUrls = [];
+
+        setTimeout(async () => {
+            try {
+                const { PDFDocument } = window.PDFLib;
+
+                if (action === 'merge') {
+                    const mergedPdf = await PDFDocument.create();
+                    for (const item of pdfToolFiles) {
+                        const srcDoc = await PDFDocument.load(item.arrayBuffer);
+                        const copiedPages = await mergedPdf.copyPages(srcDoc, srcDoc.getPageIndices());
+                        copiedPages.forEach(page => mergedPdf.addPage(page));
+                    }
+                    const pdfBytes = await mergedPdf.save();
+                    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                    const newFileName = pdfToolFiles.length === 1
+                        ? `${pdfToolFiles[0].originalName}_copy.pdf`
+                        : 'Go_Converter_Merged.pdf';
+
+                    convertedBlobs.push({ blob, newFileName });
+                    currentObjectUrls.push(URL.createObjectURL(blob));
+                } else {
+                    // Split PDF
+                    const rangeStr = pdfRangeInput.value.trim();
+
+                    for (const item of pdfToolFiles) {
+                        const srcDoc = await PDFDocument.load(item.arrayBuffer);
+                        const totalPages = srcDoc.getPageCount();
+
+                        if (rangeStr) {
+                            const pageIndices = parsePageRange(rangeStr, totalPages);
+                            if (!pageIndices || pageIndices.length === 0) {
+                                alert(`Rentang halaman "${rangeStr}" tidak valid untuk "${item.file.name}" (1-${totalPages}).`);
+                                convertBtn.classList.remove('loading');
+                                hideDownloadBtn();
+                                return;
+                            }
+
+                            const outPdf = await PDFDocument.create();
+                            const copiedPages = await outPdf.copyPages(srcDoc, pageIndices);
+                            copiedPages.forEach(page => outPdf.addPage(page));
+                            const pdfBytes = await outPdf.save();
+                            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                            const newFileName = `${item.originalName}_extracted.pdf`;
+
+                            convertedBlobs.push({ blob, newFileName });
+                            currentObjectUrls.push(URL.createObjectURL(blob));
+                        } else {
+                            // Split every page into separate PDF
+                            for (let p = 0; p < totalPages; p++) {
+                                const outPdf = await PDFDocument.create();
+                                const [copiedPage] = await outPdf.copyPages(srcDoc, [p]);
+                                outPdf.addPage(copiedPage);
+                                const pdfBytes = await outPdf.save();
+                                const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                                const newFileName = `${item.originalName}_page_${p + 1}.pdf`;
+
+                                convertedBlobs.push({ blob, newFileName });
+                                currentObjectUrls.push(URL.createObjectURL(blob));
+                            }
+                        }
+                    }
+                }
+
+                downloadBtn.classList.remove('hidden');
+                downloadBtn.innerHTML = convertedBlobs.length > 1
+                    ? '<i class="ri-download-2-line"></i> Download ZIP'
+                    : '<i class="ri-download-2-line"></i> Download';
+
+                convertBtn.classList.remove('loading');
+                convertBtn.innerHTML = '<i class="ri-loop-right-line"></i> Process Again';
+
+                const totalNewSize = convertedBlobs.reduce((acc, b) => acc + b.blob.size, 0);
+                originalDimensions.textContent = `New Total: ${formatBytes(totalNewSize)}`;
+            } catch (error) {
+                console.error('Error processing PDF tools:', error);
+                alert('Terjadi kesalahan saat memproses file PDF.');
+                convertBtn.classList.remove('loading');
+                hideDownloadBtn();
+            }
+        }, 50);
+    }
+
+    function parsePageRange(rangeStr, maxPages) {
+        const indices = new Set();
+        const parts = rangeStr.split(',').map(s => s.trim()).filter(Boolean);
+        if (parts.length === 0) return null;
+
+        for (const part of parts) {
+            if (part.includes('-')) {
+                const bounds = part.split('-').map(n => parseInt(n.trim(), 10));
+                if (bounds.length !== 2 || isNaN(bounds[0]) || isNaN(bounds[1])) return null;
+                const [start, end] = bounds;
+                if (start < 1 || end > maxPages || start > end) return null;
+                for (let i = start; i <= end; i++) {
+                    indices.add(i - 1);
+                }
+            } else {
+                const num = parseInt(part, 10);
+                if (isNaN(num) || num < 1 || num > maxPages) return null;
+                indices.add(num - 1);
+            }
+        }
+
+        return Array.from(indices);
     }
 
     async function convertImages() {
@@ -408,7 +669,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
 
                     const zipBlob = await zip.generateAsync({ type: 'blob' });
-                    const zipName = 'Go_Converter_Images.zip';
+                    const zipName = currentMode === 'pdf' ? 'Go_Converter_PDFs.zip' : 'Go_Converter_Images.zip';
 
                     const url = URL.createObjectURL(zipBlob);
                     const a = document.createElement('a');
@@ -436,6 +697,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function resetWorkspace() {
         // Clear state
         currentFiles = [];
+        pdfToolFiles = [];
         convertedBlobs = [];
         currentObjectUrls.forEach(url => URL.revokeObjectURL(url));
         currentObjectUrls = [];
@@ -447,20 +709,33 @@ document.addEventListener('DOMContentLoaded', () => {
         uploadArea.classList.remove('hidden');
         workspace.classList.add('hidden');
         downloadBtn.classList.add('hidden');
-        convertBtn.innerHTML = '<i class="ri-loop-right-line"></i> Convert';
 
         // Reset selectors
         formatSelect.value = 'image/jpeg';
         qualitySlider.value = 80;
         qualityValue.textContent = '80%';
         qualityGroup.classList.remove('hidden');
-        originalSize.textContent = `Files: 0/10`;
+
+        pdfActionSelect.value = 'merge';
+        pdfRangeInput.value = '';
+        pdfRangeGroup.classList.add('hidden');
+
+        originalSize.textContent = currentMode === 'pdf' ? 'PDFs: 0/10' : 'Files: 0/10';
         originalDimensions.textContent = `Selected`;
+        hideDownloadBtn();
     }
 
     function hideDownloadBtn() {
         downloadBtn.classList.add('hidden');
-        convertBtn.innerHTML = currentFiles.length > 1 ? '<i class="ri-loop-right-line"></i> Convert Images' : '<i class="ri-loop-right-line"></i> Convert Image';
+        if (currentMode === 'pdf') {
+            convertBtn.innerHTML = pdfActionSelect.value === 'merge'
+                ? '<i class="ri-file-copy-2-line"></i> Merge PDF'
+                : '<i class="ri-scissors-cut-line"></i> Split PDF';
+        } else {
+            convertBtn.innerHTML = currentFiles.length > 1
+                ? '<i class="ri-loop-right-line"></i> Convert Images'
+                : '<i class="ri-loop-right-line"></i> Convert Image';
+        }
     }
 
     // Helper: Format bytes to KB/MB
