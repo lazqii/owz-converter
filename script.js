@@ -237,6 +237,23 @@ document.addEventListener('DOMContentLoaded', () => {
         originalDimensions.textContent = `Total Size: ${formatBytes(totalSize)}`;
     }
 
+    function renderItemToCanvas(item, fillWhite = false) {
+        const canvas = document.createElement('canvas');
+        const width = item.image.naturalWidth || item.image.width || 300;
+        const height = item.image.naturalHeight || item.image.height || 150;
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+
+        if (fillWhite) {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        ctx.drawImage(item.image, 0, 0, width, height);
+
+        return { canvas, width, height };
+    }
+
     async function convertImages() {
         if (currentFiles.length === 0) return;
 
@@ -253,55 +270,92 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(async () => {
             const format = formatSelect.value;
             const quality = parseInt(qualitySlider.value) / 100;
-            let extension = 'jpg';
-            if (format === 'image/png') extension = 'png';
-            else if (format === 'image/webp') extension = 'webp';
-            else if (format === 'image/svg+xml') extension = 'svg';
 
-            for (let i = 0; i < currentFiles.length; i++) {
-                const item = currentFiles[i];
-                let blob;
+            if (format === 'application/pdf') {
+                if (typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF) {
+                    alert('Library jsPDF gagal dimuat. Pastikan koneksi internet aktif.');
+                    convertBtn.classList.remove('loading');
+                    convertBtn.innerHTML = '<i class="ri-loop-right-line"></i> Convert Image';
+                    return;
+                }
 
-                if (format === 'image/svg+xml') {
-                    // Check if the original file is already SVG
-                    if (item.file.type === 'image/svg+xml' || item.file.name.toLowerCase().endsWith('.svg')) {
-                        blob = item.file;
-                    } else {
-                        // Convert raster image (PNG, JPG, WEBP) to SVG wrapper
-                        const width = item.image.naturalWidth || item.image.width || 300;
-                        const height = item.image.naturalHeight || item.image.height || 150;
-                        const dataUrl = item.rawDataUrl;
-                        const svgContent = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+                try {
+                    const { jsPDF } = window.jspdf;
+                    let pdf = null;
+
+                    for (let i = 0; i < currentFiles.length; i++) {
+                        const item = currentFiles[i];
+                        const { canvas, width, height } = renderItemToCanvas(item, true);
+                        const imgDataUrl = canvas.toDataURL('image/jpeg', quality);
+                        const orientation = width >= height ? 'l' : 'p';
+
+                        if (i === 0) {
+                            pdf = new jsPDF({
+                                orientation,
+                                unit: 'px',
+                                format: [width, height],
+                                hotfixes: ['px_scaling']
+                            });
+                        } else {
+                            pdf.addPage([width, height], orientation);
+                        }
+
+                        pdf.addImage(imgDataUrl, 'JPEG', 0, 0, width, height);
+                    }
+
+                    const pdfBlob = pdf.output('blob');
+                    const pdfFileName = currentFiles.length === 1
+                        ? `${currentFiles[0].originalName}_converted.pdf`
+                        : 'Go_Converter_Merged.pdf';
+
+                    convertedBlobs.push({ blob: pdfBlob, newFileName: pdfFileName });
+                    currentObjectUrls.push(URL.createObjectURL(pdfBlob));
+                } catch (error) {
+                    console.error('Error creating PDF:', error);
+                    alert('Terjadi kesalahan saat mengonversi gambar ke PDF.');
+                    convertBtn.classList.remove('loading');
+                    convertBtn.innerHTML = '<i class="ri-loop-right-line"></i> Convert Image';
+                    return;
+                }
+            } else {
+                let extension = 'jpg';
+                if (format === 'image/png') extension = 'png';
+                else if (format === 'image/webp') extension = 'webp';
+                else if (format === 'image/svg+xml') extension = 'svg';
+
+                for (let i = 0; i < currentFiles.length; i++) {
+                    const item = currentFiles[i];
+                    let blob;
+
+                    if (format === 'image/svg+xml') {
+                        // Check if the original file is already SVG
+                        if (item.file.type === 'image/svg+xml' || item.file.name.toLowerCase().endsWith('.svg')) {
+                            blob = item.file;
+                        } else {
+                            // Convert raster image (PNG, JPG, WEBP) to SVG wrapper
+                            const width = item.image.naturalWidth || item.image.width || 300;
+                            const height = item.image.naturalHeight || item.image.height || 150;
+                            const dataUrl = item.rawDataUrl;
+                            const svgContent = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
     <image width="${width}" height="${height}" xlink:href="${dataUrl}"/>
 </svg>`;
-                        blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
-                    }
-                } else {
-                    // Converting any format (including SVG input) to Canvas raster (JPEG, PNG, WEBP)
-                    const canvas = document.createElement('canvas');
-                    const width = item.image.naturalWidth || item.image.width || 300;
-                    const height = item.image.naturalHeight || item.image.height || 150;
-                    canvas.width = width;
-                    canvas.height = height;
-                    const ctx = canvas.getContext('2d');
+                            blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+                        }
+                    } else {
+                        // Converting any format (including SVG input) to Canvas raster (JPEG, PNG, WEBP)
+                        const { canvas } = renderItemToCanvas(item, format === 'image/jpeg');
 
-                    // If converting to jpeg, fill white background to resolve transparency issues
-                    if (format === 'image/jpeg') {
-                        ctx.fillStyle = '#ffffff';
-                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+                        // Convert using a Promise wrapper to work nicely with await
+                        blob = await new Promise(resolve => canvas.toBlob(resolve, format, quality));
                     }
-                    ctx.drawImage(item.image, 0, 0, width, height);
 
-                    // Convert using a Promise wrapper to work nicely with await
-                    blob = await new Promise(resolve => canvas.toBlob(resolve, format, quality));
+                    // Unique name strategy if batching duplicates
+                    const newFileName = `${item.originalName}_converted.${extension}`;
+
+                    convertedBlobs.push({ blob, newFileName });
+                    currentObjectUrls.push(URL.createObjectURL(blob));
                 }
-
-                // Unique name strategy if batching duplicates
-                const newFileName = `${item.originalName}_converted.${extension}`;
-
-                convertedBlobs.push({ blob, newFileName });
-                currentObjectUrls.push(URL.createObjectURL(blob));
             }
 
             // Update UI after logic
