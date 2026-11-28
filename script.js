@@ -2,6 +2,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // DOM Elements
     const modeImageBtn = document.getElementById('mode-image-btn');
     const modePdfBtn = document.getElementById('mode-pdf-btn');
+    const modeDataBtn = document.getElementById('mode-data-btn');
     const uploadTitle = document.getElementById('upload-title');
     const uploadFormatsInfo = document.getElementById('upload-formats-info');
 
@@ -24,13 +25,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const pdfRangeGroup = document.getElementById('pdf-range-group');
     const pdfRangeInput = document.getElementById('pdf-range-input');
 
+    const dataControls = document.getElementById('data-controls');
+    const dataFormatSelect = document.getElementById('data-format-select');
+
     const convertBtn = document.getElementById('convert-btn');
     const downloadBtn = document.getElementById('download-btn');
 
     // State
-    let currentMode = 'image'; // 'image' | 'pdf'
+    let currentMode = 'image'; // 'image' | 'pdf' | 'data'
     let currentFiles = []; // Array of { file, image, originalName }
     let pdfToolFiles = []; // Array of { file, arrayBuffer, pageCount, originalName }
+    let dataToolFiles = []; // Array of { file, parsedData, sourceExt, originalName, recordCount }
     let convertedBlobs = []; // Array of { blob, newFileName }
     let currentObjectUrls = []; // Array of URLs for cleanup
 
@@ -71,6 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Mode Toggle
         modeImageBtn.addEventListener('click', () => switchMode('image'));
         modePdfBtn.addEventListener('click', () => switchMode('pdf'));
+        modeDataBtn.addEventListener('click', () => switchMode('data'));
 
         // UI Controls
         resetBtn.addEventListener('click', resetWorkspace);
@@ -100,11 +106,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         pdfRangeInput.addEventListener('input', hideDownloadBtn);
+        dataFormatSelect.addEventListener('change', hideDownloadBtn);
 
         // Actions
         convertBtn.addEventListener('click', () => {
             if (currentMode === 'pdf') {
                 processPdfTools();
+            } else if (currentMode === 'data') {
+                processDataConversion();
             } else {
                 convertImages();
             }
@@ -116,22 +125,26 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentMode === mode) return;
         currentMode = mode;
 
+        modeImageBtn.classList.toggle('active', mode === 'image');
+        modePdfBtn.classList.toggle('active', mode === 'pdf');
+        modeDataBtn.classList.toggle('active', mode === 'data');
+
+        imageControls.classList.toggle('hidden', mode !== 'image');
+        pdfControls.classList.toggle('hidden', mode !== 'pdf');
+        dataControls.classList.toggle('hidden', mode !== 'data');
+
         if (mode === 'pdf') {
-            modePdfBtn.classList.add('active');
-            modeImageBtn.classList.remove('active');
             fileInput.setAttribute('accept', 'application/pdf');
             uploadTitle.textContent = 'Drag & Drop your PDF files here';
             uploadFormatsInfo.textContent = 'Supports PDF for Merge & Split (Max 10 PDF files)';
-            imageControls.classList.add('hidden');
-            pdfControls.classList.remove('hidden');
+        } else if (mode === 'data') {
+            fileInput.setAttribute('accept', '.xlsx,.xls,.csv,.json,.yaml,.yml,.xml');
+            uploadTitle.textContent = 'Drag & Drop your data or spreadsheet files here';
+            uploadFormatsInfo.textContent = 'Supports XLSX, CSV, JSON, YAML, XML (Max 10 files)';
         } else {
-            modeImageBtn.classList.add('active');
-            modePdfBtn.classList.remove('active');
             fileInput.setAttribute('accept', 'image/jpeg, image/png, image/webp, image/svg+xml, application/pdf');
             uploadTitle.textContent = 'Drag & Drop your image or PDF here';
             uploadFormatsInfo.textContent = 'Supports JPG, PNG, WEBP, SVG, PDF (Max 10 files / 10 PDF pages)';
-            pdfControls.classList.add('hidden');
-            imageControls.classList.remove('hidden');
         }
 
         resetWorkspace();
@@ -163,6 +176,40 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (pdfToolFiles.length > 0) {
+                uploadArea.classList.add('hidden');
+                workspace.classList.remove('hidden');
+                updateStats();
+                hideDownloadBtn();
+            }
+
+            fileInput.value = '';
+            return;
+        }
+
+        if (currentMode === 'data') {
+            if (dataToolFiles.length + newFiles.length > 10) {
+                alert('Maksimal 10 file data yang dapat diproses sekaligus.');
+                fileInput.value = '';
+                return;
+            }
+
+            const supportedExts = ['xlsx', 'xls', 'csv', 'json', 'yaml', 'yml', 'xml'];
+            let hasInvalid = false;
+
+            for (const file of newFiles) {
+                const ext = file.name.split('.').pop().toLowerCase();
+                if (!supportedExts.includes(ext)) {
+                    hasInvalid = true;
+                    continue;
+                }
+                await processDataFile(file, ext);
+            }
+
+            if (hasInvalid && dataToolFiles.length === 0) {
+                alert('Format tidak didukung. Gunakan file XLSX, XLS, CSV, JSON, YAML, atau XML.');
+            }
+
+            if (dataToolFiles.length > 0) {
                 uploadArea.classList.add('hidden');
                 workspace.classList.remove('hidden');
                 updateStats();
@@ -364,7 +411,84 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    async function processDataFile(file, ext) {
+        try {
+            let parsedData;
+            const originalName = file.name.substring(0, file.name.lastIndexOf('.')) || 'data';
+
+            if (ext === 'xlsx' || ext === 'xls' || ext === 'csv') {
+                if (typeof XLSX === 'undefined') {
+                    alert('Library SheetJS (xlsx) gagal dimuat. Pastikan koneksi internet aktif.');
+                    return;
+                }
+                const buffer = await file.arrayBuffer();
+                const workbook = XLSX.read(buffer, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                parsedData = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+            } else if (ext === 'json') {
+                const text = await file.text();
+                parsedData = JSON.parse(text);
+            } else if (ext === 'yaml' || ext === 'yml') {
+                if (typeof jsyaml === 'undefined') {
+                    alert('Library js-yaml gagal dimuat. Pastikan koneksi internet aktif.');
+                    return;
+                }
+                const text = await file.text();
+                parsedData = jsyaml.load(text);
+            } else if (ext === 'xml') {
+                const text = await file.text();
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(text, 'application/xml');
+                const parserError = xmlDoc.querySelector('parsererror');
+                if (parserError) {
+                    throw new Error('XML tidak valid');
+                }
+                parsedData = xmlToJson(xmlDoc.documentElement);
+            }
+
+            const recordCount = Array.isArray(parsedData) ? parsedData.length : 1;
+            dataToolFiles.push({ file, parsedData, sourceExt: ext, originalName, recordCount });
+            appendDataPreviewItem(ext, file.name, recordCount);
+        } catch (error) {
+            console.error('Error parsing data file:', error);
+            alert(`Gagal membaca file "${file.name}". Pastikan format file valid.`);
+        }
+    }
+
+    function appendDataPreviewItem(ext, fileName, recordCount) {
+        const iconMap = {
+            xlsx: 'ri-file-excel-2-line',
+            xls: 'ri-file-excel-2-line',
+            csv: 'ri-file-list-3-line',
+            json: 'ri-braces-line',
+            yaml: 'ri-file-code-line',
+            yml: 'ri-file-code-line',
+            xml: 'ri-code-s-slash-line'
+        };
+        const iconClass = iconMap[ext] || 'ri-file-text-line';
+
+        const item = document.createElement('div');
+        item.className = 'preview-item';
+        item.innerHTML = `
+            <div class="data-preview-card" title="${fileName} (${recordCount} item)">
+                <i class="${iconClass}"></i>
+                <span class="ext-badge">${ext}</span>
+            </div>
+            <div class="file-name" title="${fileName}">${fileName}</div>
+        `;
+        previewGallery.appendChild(item);
+    }
+
     function updateStats() {
+        if (currentMode === 'data') {
+            const totalSize = dataToolFiles.reduce((acc, obj) => acc + obj.file.size, 0);
+            const totalRows = dataToolFiles.reduce((acc, obj) => acc + obj.recordCount, 0);
+            originalSize.textContent = `Files: ${dataToolFiles.length}/10 (${totalRows} items)`;
+            originalDimensions.textContent = `Total Size: ${formatBytes(totalSize)}`;
+            return;
+        }
+
         if (currentMode === 'pdf') {
             const totalSize = pdfToolFiles.reduce((acc, obj) => acc + obj.file.size, 0);
             const totalPages = pdfToolFiles.reduce((acc, obj) => acc + obj.pageCount, 0);
@@ -669,7 +793,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
 
                     const zipBlob = await zip.generateAsync({ type: 'blob' });
-                    const zipName = currentMode === 'pdf' ? 'Go_Converter_PDFs.zip' : 'Go_Converter_Images.zip';
+                    let zipName = 'Go_Converter_Images.zip';
+                    if (currentMode === 'pdf') zipName = 'Go_Converter_PDFs.zip';
+                    else if (currentMode === 'data') zipName = 'Go_Converter_Data.zip';
 
                     const url = URL.createObjectURL(zipBlob);
                     const a = document.createElement('a');
@@ -694,10 +820,143 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    async function processDataConversion() {
+        if (dataToolFiles.length === 0) return;
+
+        const targetFormat = dataFormatSelect.value;
+        convertBtn.classList.add('loading');
+        convertBtn.innerHTML = '<i class="ri-loader-4-line"></i> Converting...';
+
+        convertedBlobs = [];
+        currentObjectUrls.forEach(url => URL.revokeObjectURL(url));
+        currentObjectUrls = [];
+
+        setTimeout(async () => {
+            try {
+                for (const item of dataToolFiles) {
+                    let blob;
+
+                    if (targetFormat === 'json') {
+                        const jsonStr = JSON.stringify(item.parsedData, null, 2);
+                        blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
+                    } else if (targetFormat === 'yaml') {
+                        if (typeof jsyaml === 'undefined') {
+                            throw new Error('Library js-yaml gagal dimuat.');
+                        }
+                        const yamlStr = jsyaml.dump(item.parsedData);
+                        blob = new Blob([yamlStr], { type: 'text/yaml;charset=utf-8' });
+                    } else if (targetFormat === 'xml') {
+                        const xmlStr = `<?xml version="1.0" encoding="UTF-8"?>\n${jsonToXml(item.parsedData, 'root')}`;
+                        blob = new Blob([xmlStr], { type: 'application/xml;charset=utf-8' });
+                    } else if (targetFormat === 'csv' || targetFormat === 'xlsx') {
+                        if (typeof XLSX === 'undefined') {
+                            throw new Error('Library SheetJS (xlsx) gagal dimuat.');
+                        }
+                        const rows = normalizeRowsForSheet(item.parsedData);
+                        const worksheet = XLSX.utils.json_to_sheet(rows);
+
+                        if (targetFormat === 'csv') {
+                            const csvStr = XLSX.utils.sheet_to_csv(worksheet);
+                            blob = new Blob([csvStr], { type: 'text/csv;charset=utf-8' });
+                        } else {
+                            const workbook = XLSX.utils.book_new();
+                            XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
+                            const wbArray = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+                            blob = new Blob([wbArray], {
+                                type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                            });
+                        }
+                    }
+
+                    const newFileName = `${item.originalName}_converted.${targetFormat}`;
+                    convertedBlobs.push({ blob, newFileName });
+                    currentObjectUrls.push(URL.createObjectURL(blob));
+                }
+
+                downloadBtn.classList.remove('hidden');
+                downloadBtn.innerHTML = convertedBlobs.length > 1
+                    ? '<i class="ri-download-2-line"></i> Download ZIP'
+                    : '<i class="ri-download-2-line"></i> Download';
+
+                convertBtn.classList.remove('loading');
+                convertBtn.innerHTML = '<i class="ri-loop-right-line"></i> Convert Again';
+
+                const totalNewSize = convertedBlobs.reduce((acc, b) => acc + b.blob.size, 0);
+                originalDimensions.textContent = `New Total: ${formatBytes(totalNewSize)}`;
+            } catch (error) {
+                console.error('Error converting data:', error);
+                alert(`Terjadi kesalahan saat mengonversi data: ${error.message}`);
+                convertBtn.classList.remove('loading');
+                hideDownloadBtn();
+            }
+        }, 50);
+    }
+
+    function normalizeRowsForSheet(data) {
+        const list = Array.isArray(data) ? data : [data];
+        if (list.length === 0) return [{}];
+
+        return list.map(entry => {
+            if (entry === null || typeof entry !== 'object') {
+                return { value: entry };
+            }
+            const flat = {};
+            for (const [k, v] of Object.entries(entry)) {
+                flat[k] = (v !== null && typeof v === 'object') ? JSON.stringify(v) : v;
+            }
+            return flat;
+        });
+    }
+
+    function xmlToJson(node) {
+        const children = Array.from(node.children);
+        if (children.length === 0) {
+            return node.textContent.trim();
+        }
+
+        const obj = {};
+        for (const child of children) {
+            const key = child.nodeName;
+            const val = xmlToJson(child);
+            if (obj[key] !== undefined) {
+                if (!Array.isArray(obj[key])) {
+                    obj[key] = [obj[key]];
+                }
+                obj[key].push(val);
+            } else {
+                obj[key] = val;
+            }
+        }
+        return obj;
+    }
+
+    function jsonToXml(data, tagName = 'item') {
+        const safeTag = String(tagName).replace(/[^a-zA-Z0-9_-]/g, '_') || 'item';
+        if (data === null || data === undefined) {
+            return `<${safeTag}/>`;
+        }
+        if (Array.isArray(data)) {
+            return `<${safeTag}>\n${data.map(item => `  ${jsonToXml(item, 'row')}`).join('\n')}\n</${safeTag}>`;
+        }
+        if (typeof data === 'object') {
+            const inner = Object.entries(data)
+                .map(([k, v]) => `  ${jsonToXml(v, k)}`)
+                .join('\n');
+            return `<${safeTag}>\n${inner}\n</${safeTag}>`;
+        }
+        const escaped = String(data)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+        return `<${safeTag}>${escaped}</${safeTag}>`;
+    }
+
     function resetWorkspace() {
         // Clear state
         currentFiles = [];
         pdfToolFiles = [];
+        dataToolFiles = [];
         convertedBlobs = [];
         currentObjectUrls.forEach(url => URL.revokeObjectURL(url));
         currentObjectUrls = [];
@@ -720,7 +979,15 @@ document.addEventListener('DOMContentLoaded', () => {
         pdfRangeInput.value = '';
         pdfRangeGroup.classList.add('hidden');
 
-        originalSize.textContent = currentMode === 'pdf' ? 'PDFs: 0/10' : 'Files: 0/10';
+        dataFormatSelect.value = 'xlsx';
+
+        if (currentMode === 'pdf') {
+            originalSize.textContent = 'PDFs: 0/10';
+        } else if (currentMode === 'data') {
+            originalSize.textContent = 'Files: 0/10';
+        } else {
+            originalSize.textContent = 'Files: 0/10';
+        }
         originalDimensions.textContent = `Selected`;
         hideDownloadBtn();
     }
@@ -731,6 +998,10 @@ document.addEventListener('DOMContentLoaded', () => {
             convertBtn.innerHTML = pdfActionSelect.value === 'merge'
                 ? '<i class="ri-file-copy-2-line"></i> Merge PDF'
                 : '<i class="ri-scissors-cut-line"></i> Split PDF';
+        } else if (currentMode === 'data') {
+            convertBtn.innerHTML = dataToolFiles.length > 1
+                ? '<i class="ri-loop-right-line"></i> Convert Files'
+                : '<i class="ri-loop-right-line"></i> Convert Data';
         } else {
             convertBtn.innerHTML = currentFiles.length > 1
                 ? '<i class="ri-loop-right-line"></i> Convert Images'
